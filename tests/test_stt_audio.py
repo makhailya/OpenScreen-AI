@@ -88,16 +88,21 @@ def test_stream_configuration_and_audio_copy(device, monkeypatch):
 def test_overflow_returns_without_consumer_and_exposes_sequence_gap(device):
     source = MicrophoneSource(block_ms=100, buffer_ms=500)
     source.start()
+    assert source.queue_depth == source.queue_max_depth == 0
     stream = source._stream
     # Без чтения и без копирования входного блока при полной очереди.
     for _ in range(5):
         stream.emit()
+    assert source.queue_depth == source.queue_max_depth == 5
     stream.emit(object(), overflow=True)
     stream.emit(object())
     assert source.dropped_blocks == 2
     assert source.input_overflows == 1
+    assert source.queue_depth == source.queue_max_depth == 5
     assert [source.read().sequence for _ in range(5)] == list(range(5))
     assert source.read() is None
+    assert source.queue_depth == 0
+    assert source.queue_max_depth == 5
 
     stream.emit()
     block = source.read()

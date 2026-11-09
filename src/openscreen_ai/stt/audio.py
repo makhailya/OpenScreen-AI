@@ -53,6 +53,17 @@ class MicrophoneSource:
         self._sequence = 0
         self._dropped_blocks = 0
         self._input_overflows = 0
+        self._queue_max_depth = 0
+
+    @property
+    def queue_depth(self) -> int:
+        """Текущее число блоков в очереди."""
+        return len(self._blocks)
+
+    @property
+    def queue_max_depth(self) -> int:
+        """Максимальное число блоков за запуск."""
+        return self._queue_max_depth
 
     @property
     def dropped_blocks(self) -> int:
@@ -82,6 +93,7 @@ class MicrophoneSource:
         self._blocks.clear()
         self._callback_error = None
         self._sequence = self._dropped_blocks = self._input_overflows = 0
+        self._queue_max_depth = 0
 
         def callback(indata: Any, frames: int, timing: Any, status: Any) -> None:
             try:
@@ -130,6 +142,9 @@ class MicrophoneSource:
         self._blocks.append(
             AudioBlock(indata.copy().reshape(-1), now - age, sequence, self._input_overflows)
         )
+        depth = len(self._blocks)
+        if depth > self._queue_max_depth:
+            self._queue_max_depth = depth
 
     def read(self) -> AudioBlock | None:
         """Забирает следующий блок без ожидания или проверяет состояние входа."""

@@ -157,6 +157,21 @@ def test_recognizes_multiple_phrases_with_one_loaded_model() -> None:
     assert all(result.recognition_ms >= 0 for result in results)
 
 
+def test_decode_completion_is_after_decode_and_recognition_times_only_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, recognizer, _vad, _loads = make_engine(texts=["Фраза"])
+    clock = iter((10.0, 11.0, 11.25, 11.5))
+    monkeypatch.setattr("openscreen_ai.stt.engine.time.perf_counter", lambda: next(clock))
+    engine.start()
+    [result] = engine.process_audio(array("f", [1, 1, 0, 0]), captured_at=9.0)
+    assert recognizer.decode_calls == 1
+    assert result.endpoint_at == 10.0
+    assert result.recognition_ms == pytest.approx(250.0)
+    assert result.decode_completed_at == 11.5
+    assert result.endpoint_at <= result.decode_completed_at
+
+
 def test_empty_decoding_result_is_ignored() -> None:
     engine, recognizer, _vad, _loads = make_engine(texts=[""])
     engine.start()

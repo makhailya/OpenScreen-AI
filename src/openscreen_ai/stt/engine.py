@@ -39,6 +39,7 @@ class SttResult:
     cpu_ms: float
     audio_seconds: float
     vad_window_ms: float = 32.0
+    decode_completed_at: float | None = None
 
 
 class SttEngine:
@@ -240,6 +241,7 @@ class SttEngine:
                     self._speech_started_at = None
 
                     text, recognition_ms, cpu_ms = self._decode(segment)
+                    decode_completed_at = time.perf_counter()
                     if text:
                         results.append(
                             SttResult(
@@ -252,6 +254,7 @@ class SttEngine:
                                 cpu_ms=cpu_ms,
                                 audio_seconds=len(segment) / self.config.sample_rate,
                                 vad_window_ms=window_seconds * 1000,
+                                decode_completed_at=decode_completed_at,
                             )
                         )
         except SttDecodeError:

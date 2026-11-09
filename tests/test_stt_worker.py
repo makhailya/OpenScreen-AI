@@ -17,9 +17,15 @@ class FakeMicrophone:
         self.blocks = deque(blocks)
         self.calls = calls
         self.dropped_blocks = dropped_blocks
+        self.input_overflows = max((block.input_overflows for block in blocks), default=0)
+        self.queue_max_depth = len(blocks)
         self.fail_read = fail_read
         self.empty = Event()
         self.owner = get_ident()
+
+    @property
+    def queue_depth(self):
+        return len(self.blocks)
 
     def start(self):
         assert self.owner == get_ident()
@@ -240,21 +246,69 @@ def test_stop_during_model_load_does_not_open_microphone(session):
         ([block(0), block(2)], 1, [("decode", 0, 0.5), "reset", ("decode", 2, 2.5)]),
         ([block(2)], 2, ["reset", ("decode", 2, 2.5)]),
         ([block(0)], 1, [("decode", 0, 0.5), "reset"]),
+        ([block(0), block(2, 1)], 1,
+         [("decode", 0, 0.5), "reset", ("decode", 2, 2.5)]),
         (
             [block(0), block(1, 1), block(2, 1)],
             0,
             [("decode", 0, 0.5), "reset", ("decode", 1, 1.5), ("decode", 2, 2.5)],
         ),
     ],
-    ids=["gap-before-last", "initial-gap", "tail-drop", "input-overflow"],
+    ids=["gap-before-last", "initial-gap", "tail-drop", "gap-and-overflow",
+         "input-overflow"],
 )
 def test_reset_at_audio_discontinuities(session, blocks, dropped, expected):
     controller, calls, _, _ = session(blocks, dropped_blocks=dropped)
+    diagnostics = QSignalSpy(controller.diagnostic_ready)
     assert controller.start()
     wait_until(lambda: len(calls) >= len(expected) + 2)
     controller.request_stop()
     wait_until(lambda: controller.state == SttState.STOPPED)
     assert calls[2:-2] == expected
+    expected_results = sum(
+        item[0] == "decode" for item in expected if isinstance(item, tuple)
+    )
+    assert diagnostics.count() == expected_results + calls.count("reset")
+    for i in range(diagnostics.count()):
+        item = diagnostics.at(i)[0]
+        assert item.worker_emit_at <= item.controller_received_at
+        assert item.vad_resets_total <= calls.count("reset")
+    reset_items = [
+        diagnostics.at(i)[0] for i in range(diagnostics.count())
+        if diagnostics.at(i)[0].endpoint_at is None
+    ]
+    assert len(reset_items) == calls.count("reset")
+    assert reset_items[-1].vad_resets_total == calls.count("reset")
+    sequences = [block.sequence for block in blocks]
+    assert reset_items[-1].vad_resets_gap == (
+        1 if sequences and sequences != list(range(len(sequences))) else 0
+    )
+    assert reset_items[-1].vad_resets_tail == (1 if expected[-1] == "reset" else 0)
+    assert reset_items[-1].vad_resets_overflow == (
+        1 if any(block.input_overflows for block in blocks) else 0
+    )
+    if blocks == [block(0), block(2, 1)]:
+        assert reset_items[-1].vad_resets_gap == 1
+        assert reset_items[-1].vad_resets_overflow == 1
+        assert reset_items[-1].vad_resets_total == 1
+
+
+def test_diagnostic_matches_transcription_and_suppressed_delivery(session):
+    controller, _, _, _ = session([block(0)])
+    results = QSignalSpy(controller.transcription_ready)
+    diagnostics = QSignalSpy(controller.diagnostic_ready)
+    assert controller.start()
+    wait_until(lambda: results.count() == diagnostics.count() == 1)
+    item = diagnostics.at(0)[0]
+    assert item.forwarded is True
+    assert item.endpoint_at == results.at(0)[0].endpoint_at
+    assert item.recognition_ms == results.at(0)[0].recognition_ms
+    assert item.decode_completed_at is None
+    controller.request_stop()
+    controller._on_transcription((SttResult("late", 3, 2, 1, None, 1, 1, 0.04), item))
+    assert results.count() == 1
+    assert diagnostics.count() == 2
+    assert diagnostics.at(1)[0].forwarded is False
 
 
 @pytest.mark.parametrize(
