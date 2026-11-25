@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from openscreen_ai.config import AppConfig, load_config
 from openscreen_ai.core.assistant import Assistant
+from openscreen_ai.providers.factory import ProviderConfig, ProviderFactory
 from openscreen_ai.providers.ollama_provider import OllamaProvider
 from openscreen_ai.stt.availability import check_stt_available
 from openscreen_ai.stt.config import SttConfig
@@ -33,7 +34,7 @@ def create_window(
     """Собирает зависимости приложения без загрузки STT-моделей."""
     from openscreen_ai.stt.worker import SttController
 
-    provider = OllamaProvider(config)
+    provider = ProviderFactory(OllamaProvider).create(ProviderConfig(config.provider, config))
     assistant = Assistant(provider)
     resolved_stt_config = stt_config or SttConfig(
         model_dir=os.environ.get("OPENSCREEN_STT_MODEL_DIR") or None,
