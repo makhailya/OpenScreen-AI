@@ -99,21 +99,96 @@ def test_provider_explains_unavailable_server() -> None:
 @pytest.mark.parametrize(
     ("frames", "expected"),
     [
-        (["private</thi", "nk>answer"], ["answer"]),
-        (["ordinary ", "answer"], ["ordinary answer"]),
+        (["before <thi", "nk>secret</thi", "nk>after"], "before after"),
+        (["<think>private"], ""),
+        (["ordinary ", "answer"], "ordinary answer"),
+        ([], ""),
     ],
 )
-def test_lfm3_implicit_reasoning_or_plain_response(frames, expected):
+def test_explicit_reasoning_frames(frames, expected):
     async def handle(request):
-        lines = [json.dumps({"response": frame, "done": False}) for frame in frames]
+        lines = [json.dumps({"response": frame, "thinking": "secret"}) for frame in frames]
         lines.append(json.dumps({"done": True}))
         return httpx.Response(200, content="\n".join(lines), request=request)
 
-    provider = OllamaProvider(
-        AppConfig(model="hf.co/AtomicChat/LFM3-1.7B"), transport=httpx.MockTransport(handle)
-    )
+    provider = OllamaProvider(AppConfig(), transport=httpx.MockTransport(handle))
 
     async def collect():
-        return [part async for part in provider.stream("test")]
+        return "".join([part async for part in provider.stream("test")])
 
     assert asyncio.run(collect()) == expected
+
+
+def test_plain_text_arrives_before_terminal_frame():
+    class GatedStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"response":"first","done":false}\n'
+            raise AssertionError("terminal frame was read before first chunk")
+
+    async def handle(request):
+        return httpx.Response(200, stream=GatedStream(), request=request)
+
+    async def check():
+        provider = OllamaProvider(
+            AppConfig(think=False), transport=httpx.MockTransport(handle)
+        )
+        stream = provider.stream("test")
+        assert await anext(stream) == "first"
+        await stream.aclose()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("suffix", ["", "</think>answer"])
+def test_reasoning_buffer_limit(suffix):
+    async def handle(request):
+        line = json.dumps({"response": "<think>" + "x" * 65537 + suffix, "done": True})
+        return httpx.Response(200, content=line, request=request)
+
+    async def collect():
+        provider = OllamaProvider(AppConfig(), transport=httpx.MockTransport(handle))
+        return [part async for part in provider.stream("test")]
+
+    with pytest.raises(OllamaError, match="лимит"):
+        asyncio.run(collect())
+
+
+def test_think_false_sent_when_explicitly_configured():
+    async def handle(request):
+        assert json.loads(request.content)["think"] is False
+        return httpx.Response(200, json={"response": "ok", "done": True}, request=request)
+
+    async def collect():
+        provider = OllamaProvider(AppConfig(think=False), transport=httpx.MockTransport(handle))
+        return [part async for part in provider.stream("test")]
+
+    assert asyncio.run(collect()) == ["ok"]
+
+
+def test_cancellation_during_reasoning_and_next_request():
+    class BlockAfterReasoning(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"response":"<think>secret","done":false}\n'
+            await asyncio.Event().wait()
+
+    requests = 0
+
+    async def handle(request):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(200, stream=BlockAfterReasoning(), request=request)
+        return httpx.Response(200, json={"response": "recovered", "done": True}, request=request)
+
+    async def check():
+        provider = OllamaProvider(AppConfig(), transport=httpx.MockTransport(handle))
+        stream = provider.stream("first")
+        task = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [part async for part in provider.stream("second")] == ["recovered"]
+
+    asyncio.run(check())

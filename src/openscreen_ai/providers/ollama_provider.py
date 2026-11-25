@@ -16,6 +16,48 @@ class OllamaError(RuntimeError):
     """Ошибка, которую можно безопасно показать пользователю."""
 
 
+class _ReasoningFilter:
+    """Remove explicitly marked reasoning while streaming ordinary text."""
+
+    def __init__(self) -> None:
+        self.hidden = False
+        self.pending = ""
+        self.hidden_chars = 0
+
+    def feed(self, text: str) -> str:
+        self.pending += text
+        visible = []
+        while self.pending:
+            marker = "</think>" if self.hidden else "<think>"
+            index = self.pending.find(marker)
+            if index >= 0:
+                if not self.hidden:
+                    visible.append(self.pending[:index])
+                elif self.hidden_chars + index > 65536:
+                    raise OllamaError("Ответ модели превысил лимит рассуждения.")
+                self.pending = self.pending[index + len(marker):]
+                self.hidden = not self.hidden
+                self.hidden_chars = 0
+                continue
+            keep = 0
+            for length in range(1, min(len(marker) - 1, len(self.pending)) + 1):
+                if self.pending.endswith(marker[:length]):
+                    keep = length
+            consumed = self.pending[:-keep] if keep else self.pending
+            self.pending = self.pending[-keep:] if keep else ""
+            if self.hidden:
+                self.hidden_chars += len(consumed)
+                if self.hidden_chars > 65536:
+                    raise OllamaError("Ответ модели превысил лимит рассуждения.")
+            else:
+                visible.append(consumed)
+            break
+        return "".join(visible)
+
+    def finish(self) -> str:
+        return "" if self.hidden else self.pending
+
+
 class OllamaProvider:
     """Запрашивает генерацию текста у локальной Ollama без блокировки Qt UI."""
 
@@ -42,7 +84,10 @@ class OllamaProvider:
             connect=min(10.0, self._config.timeout_seconds),
         )
         url = f"{self._config.ollama_base_url}/api/generate"
-        pending_reasoning = [] if "lfm3" in self._config.model.lower() else None
+        reasoning = _ReasoningFilter()
+        request_body = {"model": self._config.model, "prompt": prompt, "stream": True}
+        if self._config.think is not None:
+            request_body["think"] = self._config.think
         attempt_started = False
         attempt_outcome = "cancelled"
 
@@ -69,7 +114,7 @@ class OllamaProvider:
                 async with client.stream(
                     "POST",
                     url,
-                    json={"model": self._config.model, "prompt": prompt, "stream": True},
+                    json=request_body,
                 ) as response:
                     if response.is_error:
                         self._raise_for_response(response)
@@ -84,21 +129,13 @@ class OllamaProvider:
 
                         text_chunk = payload.get("response")
                         if isinstance(text_chunk, str) and text_chunk:
-                            if pending_reasoning is None:
-                                yield text_chunk
-                            else:
-                                pending_reasoning.append(text_chunk)
-                                buffered = "".join(pending_reasoning)
-                                if "</think>" in buffered:
-                                    _, visible = buffered.split("</think>", 1)
-                                    pending_reasoning = None
-                                    if visible:
-                                        yield visible
-                                elif len(buffered) > 65536:
-                                    raise OllamaError("Ответ модели превысил лимит рассуждения.")
+                            visible = reasoning.feed(text_chunk)
+                            if visible:
+                                yield visible
                         if payload.get("done") is True:
-                            if pending_reasoning:
-                                yield "".join(pending_reasoning)
+                            tail = reasoning.finish()
+                            if tail:
+                                yield tail
                             break
                     else:
                         raise OllamaError("Ollama вернула неполный поток ответа.")
