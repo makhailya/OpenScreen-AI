@@ -1,11 +1,13 @@
 """HTTP-поведение провайдера проверяется через httpx.MockTransport."""
 
 import asyncio
+import logging
 
 import httpx
 import pytest
 
 from openscreen_ai.config import AppConfig
+from openscreen_ai.core.request_lifecycle import DIAGNOSTICS
 from openscreen_ai.providers.ollama_provider import OllamaError, OllamaProvider
 
 
@@ -40,7 +42,8 @@ def test_provider_streams_response_and_sends_expected_request() -> None:
     assert request.content == b'{"model":"test-model","prompt":"Explain a list","stream":true}'
 
 
-def test_provider_explains_missing_model() -> None:
+def test_provider_explains_missing_model_finishes_attempt_as_provider_error(caplog) -> None:
+    DIAGNOSTICS.reset()
     async def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "model not found"}, request=request)
 
@@ -52,8 +55,31 @@ def test_provider_explains_missing_model() -> None:
     async def collect_response() -> list[str]:
         return [chunk async for chunk in provider.stream("Hello")]
 
-    with pytest.raises(OllamaError, match="missing-model.*не найдена"):
-        asyncio.run(collect_response())
+    with caplog.at_level(logging.INFO, logger="openscreen_ai.core.request_lifecycle"):
+        with pytest.raises(OllamaError, match="не нашла настроенную модель") as raised:
+            asyncio.run(collect_response())
+    assert "missing-model" not in str(raised.value)
+    starts = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("llm.http_attempt_started")
+    ]
+    finishes = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("llm.http_attempt_finished")
+    ]
+    assert len(starts) == len(finishes) == 1
+    assert (
+        starts[0].split("request_id=")[1].split()[0]
+        == finishes[0].split("request_id=")[1].split()[0]
+    )
+    assert (
+        starts[0].split("attempt_id=")[1].split()[0]
+        == finishes[0].split("attempt_id=")[1].split()[0]
+    )
+    assert finishes[0].endswith("state=failed outcome=provider_error")
+    assert DIAGNOSTICS.pending_attempt_count == 0
 
 
 def test_provider_explains_unavailable_server() -> None:
