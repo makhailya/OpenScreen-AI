@@ -12,7 +12,9 @@ class FakeProvider:
     def __init__(self) -> None:
         self.received_prompt: str | None = None
 
-    async def stream(self, prompt: str) -> AsyncIterator[str]:
+    async def stream(
+        self, prompt: str, *, request_id: str | None = None
+    ) -> AsyncIterator[str]:
         self.received_prompt = prompt
         yield "Первая часть"
         yield " и вторая часть"

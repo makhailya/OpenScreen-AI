@@ -11,6 +11,14 @@ def test_config_uses_documented_defaults() -> None:
     assert config.ollama_base_url == "http://127.0.0.1:11434"
     assert config.model == "qwen2.5-coder:7b"
     assert config.timeout_seconds == 120.0
+    assert config.think is None
+
+
+def test_thinking_configuration() -> None:
+    assert AppConfig.from_env({"OLLAMA_THINK": "false"}).think is False
+    assert AppConfig.from_env({"OLLAMA_THINK": "true"}).think is True
+    with pytest.raises(ValueError, match="OLLAMA_THINK"):
+        AppConfig.from_env({"OLLAMA_THINK": "maybe"})
 
 
 def test_config_reads_overrides_and_normalizes_url() -> None:
@@ -43,3 +51,9 @@ def test_config_reads_overrides_and_normalizes_url() -> None:
 def test_config_rejects_invalid_values(overrides: dict[str, str], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         AppConfig.from_env(overrides)
+
+
+@pytest.mark.parametrize("suffix", ["/api", "?private=example", "#fragment"])
+def test_base_url_rejects_extra_components(suffix):
+    with pytest.raises(ValueError, match="схему, хост и порт"):
+        AppConfig.from_env({"OLLAMA_BASE_URL": f"http://127.0.0.1:11434{suffix}"})

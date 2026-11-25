@@ -19,6 +19,7 @@ class AppConfig:
     ollama_base_url: str = "http://127.0.0.1:11434"
     model: str = "qwen2.5-coder:7b"
     timeout_seconds: float = 120.0
+    think: bool | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AppConfig:
@@ -28,6 +29,9 @@ class AppConfig:
         base_url = values.get("OLLAMA_BASE_URL", defaults.ollama_base_url).strip().rstrip("/")
         model = values.get("OLLAMA_MODEL", defaults.model).strip()
         raw_timeout = values.get("OLLAMA_TIMEOUT_SECONDS", str(defaults.timeout_seconds)).strip()
+        raw_think = values.get("OLLAMA_THINK", "").strip().lower()
+        if raw_think not in {"", "true", "false"}:
+            raise ValueError("OLLAMA_THINK должен быть true, false или пустым.")
 
         try:
             parsed_url = urlsplit(base_url)
@@ -38,8 +42,10 @@ class AppConfig:
 
         if parsed_url.scheme not in {"http", "https"} or not hostname:
             raise ValueError("OLLAMA_BASE_URL должен быть полноценным URL с http:// или https://.")
-        if parsed_url.username or parsed_url.password:
+        if parsed_url.username is not None or parsed_url.password is not None:
             raise ValueError("Не указывайте логин или пароль внутри OLLAMA_BASE_URL.")
+        if parsed_url.path or "?" in base_url or "#" in base_url:
+            raise ValueError("OLLAMA_BASE_URL должен содержать только схему, хост и порт.")
         try:
             is_loopback = ipaddress.ip_address(hostname).is_loopback
         except ValueError:
@@ -60,6 +66,7 @@ class AppConfig:
             ollama_base_url=base_url,
             model=model,
             timeout_seconds=timeout_seconds,
+            think={"": None, "true": True, "false": False}[raw_think],
         )
 
 

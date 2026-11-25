@@ -9,7 +9,7 @@ from typing import Protocol
 class TextProvider(Protocol):
     """Интерфейс провайдера, который возвращает ответ частями."""
 
-    def stream(self, prompt: str) -> AsyncIterator[str]: ...
+    def stream(self, prompt: str, *, request_id: str | None = None) -> AsyncIterator[str]: ...
 
 
 class Assistant:
@@ -18,10 +18,16 @@ class Assistant:
     def __init__(self, provider: TextProvider) -> None:
         self._provider = provider
 
-    async def stream_response(self, prompt: str) -> AsyncIterator[str]:
+    async def stream_response(
+        self, prompt: str, request_id: str | None = None
+    ) -> AsyncIterator[str]:
         cleaned_prompt = prompt.strip()
         if not cleaned_prompt:
             raise ValueError("Введите вопрос перед отправкой.")
 
-        async for text_chunk in self._provider.stream(cleaned_prompt):
+        if request_id is None:
+            chunks = self._provider.stream(cleaned_prompt)
+        else:
+            chunks = self._provider.stream(cleaned_prompt, request_id=request_id)
+        async for text_chunk in chunks:
             yield text_chunk
