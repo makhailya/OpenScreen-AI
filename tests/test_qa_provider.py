@@ -141,12 +141,13 @@ def test_empty_response_and_a_fresh_second_request() -> None:
 
     provider = OllamaProvider(AppConfig(), transport=httpx.MockTransport(handle))
 
-    async def collect_both() -> tuple[list[str], list[str]]:
-        first = [chunk async for chunk in provider.stream("first")]
-        second = [chunk async for chunk in provider.stream("second")]
-        return first, second
+    async def collect_both() -> list[str]:
+        with pytest.raises(OllamaError, match="неполный поток ответа"):
+            async for _ in provider.stream("first"):
+                pass
+        return [chunk async for chunk in provider.stream("second")]
 
-    assert asyncio.run(collect_both()) == ([], ["second"])
+    assert asyncio.run(collect_both()) == ["second"]
     assert len(prompts) == 2
     assert '"prompt":"first"' in prompts[0]
     assert '"prompt":"second"' in prompts[1]

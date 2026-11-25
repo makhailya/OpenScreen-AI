@@ -61,6 +61,7 @@ class OllamaProvider:
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
+                trust_env=False,
                 transport=self._transport,
                 event_hooks={"request": [on_request]},
             ) as client:
@@ -85,6 +86,8 @@ class OllamaProvider:
                             yield text_chunk
                         if payload.get("done") is True:
                             break
+                    else:
+                        raise OllamaError("Ollama вернула неполный поток ответа.")
             attempt_outcome = "success"
         except asyncio.CancelledError:
             attempt_outcome = "cancelled"

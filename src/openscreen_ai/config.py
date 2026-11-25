@@ -38,8 +38,10 @@ class AppConfig:
 
         if parsed_url.scheme not in {"http", "https"} or not hostname:
             raise ValueError("OLLAMA_BASE_URL должен быть полноценным URL с http:// или https://.")
-        if parsed_url.username or parsed_url.password:
+        if parsed_url.username is not None or parsed_url.password is not None:
             raise ValueError("Не указывайте логин или пароль внутри OLLAMA_BASE_URL.")
+        if parsed_url.path or "?" in base_url or "#" in base_url:
+            raise ValueError("OLLAMA_BASE_URL должен содержать только схему, хост и порт.")
         try:
             is_loopback = ipaddress.ip_address(hostname).is_loopback
         except ValueError:

@@ -43,3 +43,9 @@ def test_config_reads_overrides_and_normalizes_url() -> None:
 def test_config_rejects_invalid_values(overrides: dict[str, str], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         AppConfig.from_env(overrides)
+
+
+@pytest.mark.parametrize("suffix", ["/api", "?private=example", "#fragment"])
+def test_base_url_rejects_extra_components(suffix):
+    with pytest.raises(ValueError, match="схему, хост и порт"):
+        AppConfig.from_env({"OLLAMA_BASE_URL": f"http://127.0.0.1:11434{suffix}"})

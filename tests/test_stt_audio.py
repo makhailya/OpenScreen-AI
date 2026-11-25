@@ -245,6 +245,32 @@ def test_close_error_reaches_caller(device):
         source.stop()
 
 
+def test_close_error_retains_stream_for_cleanup_retry(device):
+    source = MicrophoneSource()
+    source.start()
+    stream = source._stream
+    original_close = stream.close
+    attempts = []
+
+    def fail_once(*, ignore_errors):
+        attempts.append(None)
+        if len(attempts) == 1:
+            raise OSError("native close failure")
+        return original_close(ignore_errors=ignore_errors)
+
+    stream.close = Mock(side_effect=fail_once)
+
+    with pytest.raises(AudioCaptureError, match="native close failure"):
+        source.stop_capture()
+
+    assert source._stream is stream
+    assert not stream.closed
+    source.stop_capture()
+    assert stream.close.call_count == 2
+    assert stream.closed
+    assert source._stream is None
+
+
 def test_dropped_final_overflow_callback_is_counted_before_worker_flush(device):
     from PySide6.QtCore import Qt
 

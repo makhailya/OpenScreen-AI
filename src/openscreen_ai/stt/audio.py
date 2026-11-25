@@ -179,12 +179,12 @@ class MicrophoneSource:
 
     def stop_capture(self) -> None:
         """Закрывает ввод, сохраняя очередь для штатного drain перед Stop."""
-        stream, self._stream = self._stream, None
+        stream = self._stream
         if stream is None:
             return
         try:
             stream.close(ignore_errors=False)
         except Exception as error:
             raise AudioCaptureError(f"Не удалось закрыть микрофон: {error}") from error
-        finally:
-            self._callback_error = None
+        self._stream = None
+        self._callback_error = None
