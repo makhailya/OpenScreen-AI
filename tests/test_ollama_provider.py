@@ -1,6 +1,7 @@
 """HTTP-поведение провайдера проверяется через httpx.MockTransport."""
 
 import asyncio
+import json
 import logging
 
 import httpx
@@ -93,3 +94,26 @@ def test_provider_explains_unavailable_server() -> None:
 
     with pytest.raises(OllamaError, match="Не удалось подключиться к Ollama"):
         asyncio.run(collect_response())
+
+
+@pytest.mark.parametrize(
+    ("frames", "expected"),
+    [
+        (["private</thi", "nk>answer"], ["answer"]),
+        (["ordinary ", "answer"], ["ordinary answer"]),
+    ],
+)
+def test_lfm3_implicit_reasoning_or_plain_response(frames, expected):
+    async def handle(request):
+        lines = [json.dumps({"response": frame, "done": False}) for frame in frames]
+        lines.append(json.dumps({"done": True}))
+        return httpx.Response(200, content="\n".join(lines), request=request)
+
+    provider = OllamaProvider(
+        AppConfig(model="hf.co/AtomicChat/LFM3-1.7B"), transport=httpx.MockTransport(handle)
+    )
+
+    async def collect():
+        return [part async for part in provider.stream("test")]
+
+    assert asyncio.run(collect()) == expected

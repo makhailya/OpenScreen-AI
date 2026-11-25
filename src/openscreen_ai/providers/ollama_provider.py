@@ -42,6 +42,7 @@ class OllamaProvider:
             connect=min(10.0, self._config.timeout_seconds),
         )
         url = f"{self._config.ollama_base_url}/api/generate"
+        pending_reasoning = [] if "lfm3" in self._config.model.lower() else None
         attempt_started = False
         attempt_outcome = "cancelled"
 
@@ -83,8 +84,21 @@ class OllamaProvider:
 
                         text_chunk = payload.get("response")
                         if isinstance(text_chunk, str) and text_chunk:
-                            yield text_chunk
+                            if pending_reasoning is None:
+                                yield text_chunk
+                            else:
+                                pending_reasoning.append(text_chunk)
+                                buffered = "".join(pending_reasoning)
+                                if "</think>" in buffered:
+                                    _, visible = buffered.split("</think>", 1)
+                                    pending_reasoning = None
+                                    if visible:
+                                        yield visible
+                                elif len(buffered) > 65536:
+                                    raise OllamaError("Ответ модели превысил лимит рассуждения.")
                         if payload.get("done") is True:
+                            if pending_reasoning:
+                                yield "".join(pending_reasoning)
                             break
                     else:
                         raise OllamaError("Ollama вернула неполный поток ответа.")
