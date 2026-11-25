@@ -6,20 +6,27 @@ import ipaddress
 import math
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+
+
+class ProviderKind(StrEnum):
+    OLLAMA = "ollama"
+    CHATGPT = "chatgpt"
 
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     """Настройки подключения к локальному серверу Ollama."""
 
-    ollama_base_url: str = "http://127.0.0.1:11434"
-    model: str = "qwen2.5-coder:7b"
+    ollama_base_url: str = field(default="http://127.0.0.1:11434", repr=False)
+    model: str = field(default="qwen2.5-coder:7b", repr=False)
     timeout_seconds: float = 120.0
     think: bool | None = None
+    provider: ProviderKind = ProviderKind.OLLAMA
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AppConfig:
@@ -30,6 +37,12 @@ class AppConfig:
         model = values.get("OLLAMA_MODEL", defaults.model).strip()
         raw_timeout = values.get("OLLAMA_TIMEOUT_SECONDS", str(defaults.timeout_seconds)).strip()
         raw_think = values.get("OLLAMA_THINK", "").strip().lower()
+        try:
+            provider = ProviderKind(values.get("OPENSCREEN_PROVIDER", "ollama").strip().lower())
+        except ValueError:
+            raise ValueError("Неизвестный провайдер OPENSCREEN_PROVIDER.") from None
+        if provider is not ProviderKind.OLLAMA:
+            raise ValueError("Провайдер ChatGPT пока недоступен.")
         if raw_think not in {"", "true", "false"}:
             raise ValueError("OLLAMA_THINK должен быть true, false или пустым.")
 
@@ -37,8 +50,8 @@ class AppConfig:
             parsed_url = urlsplit(base_url)
             hostname = parsed_url.hostname
             _ = parsed_url.port  # Accessing port validates its format and range.
-        except ValueError as error:
-            raise ValueError("OLLAMA_BASE_URL содержит некорректный адрес или порт.") from error
+        except ValueError:
+            raise ValueError("OLLAMA_BASE_URL содержит некорректный адрес или порт.") from None
 
         if parsed_url.scheme not in {"http", "https"} or not hostname:
             raise ValueError("OLLAMA_BASE_URL должен быть полноценным URL с http:// или https://.")
@@ -57,8 +70,8 @@ class AppConfig:
 
         try:
             timeout_seconds = float(raw_timeout)
-        except ValueError as error:
-            raise ValueError("OLLAMA_TIMEOUT_SECONDS должен быть числом больше нуля.") from error
+        except ValueError:
+            raise ValueError("OLLAMA_TIMEOUT_SECONDS должен быть числом больше нуля.") from None
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("OLLAMA_TIMEOUT_SECONDS должен быть числом больше нуля.")
 
@@ -67,6 +80,7 @@ class AppConfig:
             model=model,
             timeout_seconds=timeout_seconds,
             think={"": None, "true": True, "false": False}[raw_think],
+            provider=provider,
         )
 
 
